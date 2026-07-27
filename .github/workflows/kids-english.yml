@@ -1,8 +1,6 @@
 name: kids-english-bot
 
 on:
-  schedule:
-    - cron: '0 22 * * *'   # UTC 22:00 = KST 07:00 (매일 아침 7시)
   workflow_dispatch:        # 깃허브에서 수동 실행(테스트) 버튼
 
 jobs:
