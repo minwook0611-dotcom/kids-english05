@@ -18,7 +18,7 @@ GEMINI_API_KEY     = os.environ["GEMINI_API_KEY"]      # 기존 봇과 같은 �
 TELEGRAM_BOT_TOKEN = os.environ["TELEGRAM_BOT_TOKEN"]
 TELEGRAM_CHAT_ID   = os.environ["TELEGRAM_CHAT_ID"]     # 단체방은 음수 (예: -1001234567890)
 
-MODEL = "gemini-2.5-flash"   # 기존 봇이 쓰는 모델명과 동일하게 맞추면 됨
+MODEL = "gemini-flash-latest"   # 기존 봇이 쓰는 모델명과 동일하게 맞추면 됨
 
 # 한국 시간 기준 오늘 날짜
 KST   = datetime.timezone(datetime.timedelta(hours=9))
