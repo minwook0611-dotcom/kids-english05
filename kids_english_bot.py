@@ -1,23 +1,24 @@
 #!/usr/bin/env python3
 """
-kids-english-bot
+kids-english-bot (Gemini 버전)
 매일 아침 초등학생용 영어 10선을 텔레그램 단체방으로 발송한다.
 - 대상: 초등 3학년 + 6학년 남매 (한 단체방에서 함께 학습)
 - 소재: 게임(로블록스·포켓몬고·브롤스타즈), 아이돌/K-pop, 초등 눈높이 뉴스, 교과(영어·사회·과학)
-- 시사영어 봇과 동일하게 GitHub Actions cron으로 매일 07:00(KST) 실행
+- 기존 시사영어 봇과 동일하게 GitHub Actions cron으로 매일 07:00(KST) 실행
 """
 
 import os
 import datetime
 import requests
-import anthropic
+from google import genai
+from google.genai import types
 
 # ── 환경변수 (GitHub Secrets) ──────────────────────────────
-ANTHROPIC_API_KEY  = os.environ["ANTHROPIC_API_KEY"]
+GEMINI_API_KEY     = os.environ["GEMINI_API_KEY"]      # 기존 봇과 같은 시크릿 이름 사용
 TELEGRAM_BOT_TOKEN = os.environ["TELEGRAM_BOT_TOKEN"]
-TELEGRAM_CHAT_ID   = os.environ["TELEGRAM_CHAT_ID"]   # 단체방은 음수 (예: -1001234567890)
+TELEGRAM_CHAT_ID   = os.environ["TELEGRAM_CHAT_ID"]     # 단체방은 음수 (예: -1001234567890)
 
-MODEL = "claude-sonnet-5"   # 비용을 줄이려면 "claude-haiku-4-5-20251001" 로 교체 가능
+MODEL = "gemini-2.5-flash"   # 기존 봇이 쓰는 모델명과 동일하게 맞추면 됨
 
 # 한국 시간 기준 오늘 날짜
 KST   = datetime.timezone(datetime.timedelta(hours=9))
@@ -28,8 +29,8 @@ SYSTEM = (
     "너는 초등학생 영어 선생님이야. 초등학교 3학년과 6학년 남매를 위해 "
     "매일 영어 단어 10개를 뽑아준다. 아이들이 좋아하는 소재(게임: 로블록스·포켓몬고·"
     "브롤스타즈, 아이돌/K-pop, 초등 눈높이 뉴스)와 학교 교과(영어·사회·과학)를 엮어 "
-    "재미있게 만든다. 필요하면 web_search로 요즘 실제로 화제인 게임 이벤트나 "
-    "아이돌 소식을 확인해서 자연스럽게 반영해라. 항상 안전하고 긍정적인 내용만 다룬다."
+    "재미있게 만든다. 요즘 실제로 화제인 게임 이벤트나 아이돌 소식을 구글 검색으로 "
+    "확인해서 자연스럽게 반영해라. 항상 안전하고 긍정적인 내용만 다룬다."
 )
 
 USER = f"""오늘({today}) '초등 영어 10선'을 만들어줘.
@@ -39,32 +40,34 @@ USER = f"""오늘({today}) '초등 영어 10선'을 만들어줘.
    뒤 6개는 [초6]용 — 짧은 구/문장 수준, 사회·과학 교과와도 연계.
 2) 각 항목 형식(그대로 지켜):
    *N. [초3]/[초6] 이모지 English — 한글 뜻*
-   아이 눈높이의 짧고 쉬운 예문 (English **bold** 표시)
+   아이 눈높이의 짧고 쉬운 예문 (English 단어는 *별표*로 강조)
    → 한글 해석
    (이모지: 🎮게임 / 🎤아이돌 / 📰뉴스 / 📖교과)
 3) 게임·아이돌 예문에는 요즘 실제 화제(포켓몬 GO Fest, 브롤스타즈 챔피언십,
    로블록스 신규 이벤트, 최신 컴백 등)를 살짝 반영.
 4) 맨 끝에 '🎯 오늘의 미션' 한 줄: 오늘 단어 하나로 아이가 직접 영어 문장 만들어보기.
-5) 욕설·폭력·과금 유도 없이 안전하게. 텔레그램 발송용이므로 단어는 마크다운 볼드(*단어*)로 강조.
+5) 욕설·폭력·과금 유도 없이 안전하게. 텔레그램 발송용이므로 단어는 *별표*로 강조.
 
 맨 위 제목은 반드시 이 형식으로 시작:
 📚 오늘의 초등 영어 10선 ({today})
 
 설명·머리말 없이 제목부터 바로 시작해."""
 
-# ── 생성 ────────────────────────────────────────────────────
-client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
+# ── 생성 (Gemini + 구글 검색 그라운딩) ─────────────────────
+client = genai.Client(api_key=GEMINI_API_KEY)
 
-resp = client.messages.create(
+resp = client.models.generate_content(
     model=MODEL,
-    max_tokens=2000,
-    system=SYSTEM,
-    tools=[{"type": "web_search_20250305", "name": "web_search", "max_uses": 3}],
-    messages=[{"role": "user", "content": USER}],
+    contents=USER,
+    config=types.GenerateContentConfig(
+        system_instruction=SYSTEM,
+        tools=[types.Tool(google_search=types.GoogleSearch())],
+        max_output_tokens=2000,
+        temperature=0.9,
+    ),
 )
 
-# 텍스트 블록만 이어붙여 본문 구성 (web_search 사용 시 중간 블록 제외)
-body = "".join(b.text for b in resp.content if b.type == "text").strip()
+body = (resp.text or "").strip()
 
 
 # ── 텔레그램 발송 ───────────────────────────────────────────
