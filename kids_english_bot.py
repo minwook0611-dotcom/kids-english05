@@ -1,23 +1,22 @@
 #!/usr/bin/env python3
 """
-kids-english-bot (Groq 버전) — 한국어 품질 개선 + 시인성/발음 링크
+kids-english-bot (Groq / gpt-oss-120b) — 중복 단어 제외 기능 추가
 매일 아침 초등학생용 영어 10선을 텔레그램 단체방으로 발송한다.
 
 [이번 개선]
-1) 모델을 llama → qwen/qwen3-32b 로 교체 (한국어 훨씬 자연스러움, 언어 혼입 감소)
-2) 프롬프트 강화:
-   - 초3은 '짧고 쉬운 기초 단어'만 (choreographer 같은 어려운 단어 금지)
-   - 한국어 문장에 일본어·중국어·베트남어 등 다른 언어 문자 사용 절대 금지
-3) 시인성: 영어 단어 <code> 강조 + 초3/초6 구역 분리 + 구분선
-4) 발음: 단어 옆 🔊 네이버 영어사전 링크(원어민 음성)
+1) 중복 방지: 이미 배포한 단어를 sent_words.json 에 누적 저장하고,
+   다음 실행 때 그 목록을 프롬프트에 넣어 '다시 쓰지 마라'고 지시 → 매일 새 단어만.
+   (워크플로우가 sent_words.json 을 리포에 커밋해줘야 기억이 유지됨 — .yml 참고)
+2) 미션 줄의 **단어** 굵게 표시 버그 수정.
 
-* 최고의 한국어 품질을 원하면 Gemini(gemini-2.5-flash)가 더 낫다. (하단 주석 참고)
+* 시인성(<code> 강조/구분선) + 발음(🔊 네이버 사전 링크) 기능은 그대로.
 """
 
 import os
 import re
 import html
 import json
+import pathlib
 import datetime
 from urllib.parse import quote
 
@@ -25,17 +24,34 @@ import requests
 from openai import OpenAI
 
 # ── 환경변수 (GitHub Secrets) ──────────────────────────────
-GROQ_API_KEY       = os.environ["GROQ_API_KEY"]        # gsk_... 로 시작
+GROQ_API_KEY       = os.environ["GROQ_API_KEY"]
 TELEGRAM_BOT_TOKEN = os.environ["TELEGRAM_BOT_TOKEN"]
-TELEGRAM_CHAT_ID   = os.environ["TELEGRAM_CHAT_ID"]     # 단체방은 음수 (예: -1001234567890)
+TELEGRAM_CHAT_ID   = os.environ["TELEGRAM_CHAT_ID"]
 
 # Groq에서 현재 사용 가능 + 무료 티어 모델.
-# (주의: qwen/qwen3-32b, llama-3.3-70b-versatile 은 Groq가 폐기했거나 폐기 예정이라 사용 불가/불안정)
 MODEL = "openai/gpt-oss-120b"
 
 # 한국 시간 기준 오늘 날짜
 KST   = datetime.timezone(datetime.timedelta(hours=9))
 today = datetime.datetime.now(KST).strftime("%Y.%m.%d")
+
+# ── 배포 이력(중복 방지) ────────────────────────────────────
+HISTORY_FILE = pathlib.Path("sent_words.json")
+
+def load_history() -> list:
+    try:
+        return json.loads(HISTORY_FILE.read_text(encoding="utf-8")).get("words", [])
+    except Exception:
+        return []
+
+def save_history(words: list) -> None:
+    HISTORY_FILE.write_text(
+        json.dumps({"words": words}, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+
+sent_words = load_history()                     # 이미 배포한 단어(소문자) 목록
+avoid_block = ", ".join(sent_words) if sent_words else "(아직 없음)"
 
 # ── 프롬프트 (JSON 출력) ────────────────────────────────────
 SYSTEM = (
@@ -46,7 +62,7 @@ SYSTEM = (
     "과학·수학 개념 어휘와 조금 더 도전적인 표현을 학습 목표로 삼는다.\n"
     "[매우 중요 — 한국어 규칙] 모든 한국어 뜻·예문·해석은 오직 '한글'과 '지정된 영어 단어'로만 써라. "
     "일본어 한자(私 등)·중국어·베트남어 등 다른 언어의 문자나 단어를 절대 섞지 마라. "
-    "적절한 한국어가 떠오르지 않으면 더 쉽고 단순한 한국어 문장으로 바꿔라. 어색한 직역도 금지.\n"
+    "적절한 한국어가 떠오르지 않으면 더 쉽고 단순한 한국어 문장으로 바꿔라.\n"
     "특정 날짜의 실제 뉴스·경기 결과·컴백 소식 같은 확인 불가능한 최신 사실은 지어내지 말고, "
     "시점에 무관한 일반적인 장면으로 예문을 만든다. 항상 안전하고 긍정적인 내용만 다룬다. "
     "출력은 지정한 JSON 형식만, 그 외 어떤 글자도 쓰지 않는다."
@@ -54,15 +70,18 @@ SYSTEM = (
 
 USER = f"""오늘({today})의 '초등 영어 10선'을 아래 JSON 형식으로만 만들어줘.
 
+[이미 배포한 단어 — 절대 다시 쓰지 마라] (대소문자 무관)
+{avoid_block}
+- 위 목록에 있는 단어는 뜻이 같아도 반드시 '다른 새 단어'로 대체하라.
+- 오늘 뽑는 10개는 전부 위 목록에 '없는' 단어여야 한다.
+
 [구성]
 - items 배열은 정확히 10개.
 - 앞 4개는 grade="초3": 반드시 '짧고 쉬운 기초 단어'만. 대략 3~6글자, 초보가 아는 수준
-  (예: star, gift, song, cute, pink, dream, smile, dance, happy, cook, jump 등).
-  choreographer, accessorize, harmony 같이 길거나 어려운 단어는 절대 쓰지 마라.
-  소재는 K-pop·아이돌·댄스·문구/소품·유행. (초3은 쉬운 게 최우선, 새로움보다 쉬움 우선)
+  (예: sky, rain, doll, ribbon, jump, smile, cook, paint 등). 길거나 어려운 단어 금지.
+  소재는 K-pop·아이돌·댄스·문구/소품·유행. (초3은 쉬운 게 최우선)
 - 뒤 6개는 grade="초6": 조금 더 도전적. 소재는 스포츠·게임·보드게임 + 수학/과학 개념 어휘.
-  이 6개 중 최소 3개는 수학·과학 개념 어휘(예: equation, probability, molecule, gravity, orbit 등).
-  초6은 너무 뻔한 단어는 피하고 매일 소재를 조금씩 순환시켜라.
+  이 6개 중 최소 3개는 수학·과학 개념 어휘(예: fraction, angle, gravity, energy, orbit 등).
 
 [각 item 필드]
 - grade: "초3" 또는 "초6"
@@ -70,7 +89,7 @@ USER = f"""오늘({today})의 '초등 영어 10선'을 아래 JSON 형식으로�
 - word: 영어 단어 (첫 글자 대문자)
 - meaning: 한국어 뜻 (짧고 자연스럽게)
 - example_en: 아이 눈높이의 짧은 예문. 한국어 문장 안에 그 영어 단어를 넣되,
-  그 단어는 반드시 **별표두개**로 감싸라. 예: "무대에서 예쁜 **dance**를 춘다."
+  그 단어는 반드시 **별표두개**로 감싸라. 예: "하늘에서 **rain**이 내린다."
   (예문의 나머지는 오직 한글로만! 다른 언어 문자 금지)
 - example_kr: 위 예문의 자연스러운 한국어 해석
 
@@ -81,7 +100,7 @@ USER = f"""오늘({today})의 '초등 영어 10선'을 아래 JSON 형식으로�
 아래 형식의 JSON 객체 하나만 출력해(코드펜스·설명·다른 언어 문자 없이):
 {{
   "items": [
-    {{"grade":"초3","emoji":"💃","word":"Dance","meaning":"춤, 춤추다","example_en":"무대에서 예쁜 **dance**를 춘다.","example_kr":"무대에서 예쁜 춤을 춘다."}}
+    {{"grade":"초3","emoji":"💃","word":"Rain","meaning":"비","example_en":"하늘에서 **rain**이 내린다.","example_kr":"하늘에서 비가 내린다."}}
   ],
   "mission_cho3":"...",
   "mission_cho6":"..."
@@ -110,17 +129,15 @@ def generate(use_json: bool):
 try:
     resp = generate(True)
 except Exception:
-    resp = generate(False)   # 모델이 JSON 모드 미지원이면 일반 모드로 재시도
+    resp = generate(False)
 
 raw = (resp.choices[0].message.content or "").strip()
-# qwen 계열은 <think>...</think> 사고과정을 붙일 수 있어 제거
 raw = re.sub(r"<think>.*?</think>", "", raw, flags=re.DOTALL).strip()
 
 
 # ── JSON 파싱 (안전장치) ────────────────────────────────────
 def parse_json(text: str):
     text = re.sub(r"^```(?:json)?|```$", "", text.strip(), flags=re.MULTILINE).strip()
-    # 본문 어딘가에 {} 객체만 뽑아내는 최후 보정
     m = re.search(r"\{.*\}", text, flags=re.DOTALL)
     if m:
         text = m.group(0)
@@ -136,8 +153,9 @@ def naver_link(word: str) -> str:
     #   https://dictionary.cambridge.org/dictionary/english/<word>
     return f"https://en.dict.naver.com/#/search?query={quote(word)}"
 
-def render_example(ex: str) -> str:
-    e = esc(ex)
+def render_rich(text: str) -> str:
+    """이스케이프 후 **단어** → 굵게 변환 (예문·미션 공통)"""
+    e = esc(text)
     e = re.sub(r"\*\*(.+?)\*\*", r"<b>\1</b>", e)
     e = e.replace("*", "")
     return e
@@ -163,16 +181,16 @@ def build_message(data: dict) -> str:
         link    = f'🔊 <a href="{naver_link(word)}">발음</a>'
 
         L.append(f"<b>{i}. {emoji} <code>{w_e}</code></b> — {meaning}   {link}")
-        L.append(render_example(it.get("example_en", "")))
+        L.append(render_rich(it.get("example_en", "")))
         L.append(f"→ {esc(it.get('example_kr', ''))}")
         L.append("")
 
     L.append("━━━━━━━━━━━━")
     L.append("🎯 <b>오늘의 미션</b>")
     if data.get("mission_cho3"):
-        L.append(f"👧 {esc(data['mission_cho3'])}")
+        L.append(f"👧 {render_rich(data['mission_cho3'])}")
     if data.get("mission_cho6"):
-        L.append(f"👦 {esc(data['mission_cho6'])}")
+        L.append(f"👦 {render_rich(data['mission_cho6'])}")
     return "\n".join(L)
 
 
@@ -212,8 +230,14 @@ try:
     data = parse_json(raw)
     body = build_message(data)
     send_telegram(body, use_html=True)
+
+    # 발송 성공 시에만 이력 갱신 (중복 방지)
+    today_words = [str(it.get("word", "")).strip().lower()
+                   for it in data.get("items", []) if it.get("word")]
+    merged = sent_words + [w for w in today_words if w and w not in sent_words]
+    save_history(merged)
+    print(f"발송 완료: {today} / 누적 단어 {len(merged)}개")
+
 except Exception as e:
     send_telegram(f"⚠️ 서식 생성 실패, 원문 발송\n\n{raw}", use_html=False)
     print("파싱 실패:", e)
-
-print("발송 완료:", today)
