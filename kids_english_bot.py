@@ -1,31 +1,20 @@
 #!/usr/bin/env python3
 """
-kids-english-bot (Gemini 버전) — B안 (그라운딩 제거 / 무료 티어 안정 운영)
-매일 아침 초등학생용 영어 10선을 텔레그램 단체방으로 발송한다.
-- 대상: 초등 3학년 + 6학년 남매 (한 단체방에서 함께 학습)
-- 소재: 게임(로블록스·포켓몬고·브롤스타즈), 아이돌/K-pop, 초등 눈높이 소재, 교과(영어·사회·과학)
-- cron-job.org가 매일 08:30(KST) GitHub API로 트리거하여 실행
-
-[B안 변경점]
-1) 구글 검색 그라운딩(google_search 도구) 제거 → 별도 할당량 소모 없음 → 429 방지
-2) 모델을 별칭(gemini-flash-latest) → 고정 버전(gemini-2.5-flash)으로 변경
-3) '실시간 검색' 지시를 없애고, 대신 '실제 뉴스를 지어내지 말 것 + 시점 무관 소재로 예문 구성'
-   으로 프롬프트 수정 → 할루시네이션(가짜 컴백/경기 소식) 방지
+kids-english-bot (Groq 버전) — 무료 티어로 오늘 바로 테스트용
 """
 
 import os
 import datetime
 import requests
-from google import genai
-from google.genai import types
+from openai import OpenAI
 
 # ── 환경변수 (GitHub Secrets) ──────────────────────────────
-GEMINI_API_KEY     = os.environ["GEMINI_API_KEY"]      # 기존 봇과 같은 시크릿 이름 사용
+GROQ_API_KEY       = os.environ["GROQ_API_KEY"]        # ★ 새 시크릿 (gsk_... 로 시작)
 TELEGRAM_BOT_TOKEN = os.environ["TELEGRAM_BOT_TOKEN"]
 TELEGRAM_CHAT_ID   = os.environ["TELEGRAM_CHAT_ID"]     # 단체방은 음수 (예: -1001234567890)
 
-# 별칭 대신 고정 버전 사용. 무료 한도가 더 필요하면 "gemini-2.5-flash-lite"로 바꾸면 됨.
-MODEL = "gemini-2.5-flash"
+# Groq 무료 모델. 한국어가 아쉬우면 "qwen/qwen3-32b" 로 바꿔보면 됨.
+MODEL = "llama-3.3-70b-versatile"
 
 # 한국 시간 기준 오늘 날짜
 KST   = datetime.timezone(datetime.timedelta(hours=9))
@@ -44,7 +33,7 @@ SYSTEM = (
     "아이들이 평소 좋아하는 세계관(게임·아이돌·스포츠·보드게임 등)을 활용하되, "
     "특정 날짜의 실제 뉴스·사건·경기 결과·컴백 소식 같은 '확인 불가능한 최신 사실'은 절대 지어내지 마라. "
     "누가 언제 무엇을 했다는 식의 시의성 정보 대신, 시간이 지나도 맞는 일반적인 상황과 표현만 사용하라. "
-    "항상 안전하고 긍정적인 내용만 다룬다."
+    "항상 안전하고 긍정적인 내용만 다룬다. 모든 설명과 해석은 자연스러운 한국어로 작성한다."
 )
 
 USER = f"""오늘({today}) '초등 영어 10선'을 만들어줘.
@@ -86,27 +75,28 @@ USER = f"""오늘({today}) '초등 영어 10선'을 만들어줘.
 
 설명·머리말 없이 제목부터 바로 시작해."""
 
-# ── 생성 (Gemini) ──────────────────────────────────────────
-# ※ B안: google_search 그라운딩 도구를 제거했다. (별도 할당량 소모 → 429 원인 제거)
-client = genai.Client(api_key=GEMINI_API_KEY)
-
-resp = client.models.generate_content(
-    model=MODEL,
-    contents=USER,
-    config=types.GenerateContentConfig(
-        system_instruction=SYSTEM,
-        max_output_tokens=2000,
-        temperature=0.9,
-    ),
+# ── 생성 (Groq / OpenAI 호환 엔드포인트) ───────────────────
+client = OpenAI(
+    base_url="https://api.groq.com/openai/v1",
+    api_key=GROQ_API_KEY,
 )
 
-body = (resp.text or "").strip()
+resp = client.chat.completions.create(
+    model=MODEL,
+    messages=[
+        {"role": "system", "content": SYSTEM},
+        {"role": "user",   "content": USER},
+    ],
+    max_tokens=2000,
+    temperature=0.9,
+)
+
+body = (resp.choices[0].message.content or "").strip()
 
 
 # ── 텔레그램 발송 ───────────────────────────────────────────
 def send_telegram(msg: str) -> None:
     url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
-    # 텔레그램 4096자 제한 → 넉넉히 분할
     for i in range(0, len(msg), 3500):
         chunk = msg[i:i + 3500]
         r = requests.post(
@@ -119,7 +109,6 @@ def send_telegram(msg: str) -> None:
             },
             timeout=30,
         )
-        # 마크다운 특수문자로 실패하면 서식 없이 재전송(안전장치)
         if not r.ok:
             requests.post(
                 url,
