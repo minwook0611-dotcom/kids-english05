@@ -7,7 +7,7 @@ kids-english-bot (Groq / gpt-oss-120b) — 중복 단어 제외 기능 추가
 1) 중복 방지: 이미 배포한 단어를 sent_words.json 에 누적 저장하고,
    다음 실행 때 그 목록을 프롬프트에 넣어 '다시 쓰지 마라'고 지시 → 매일 새 단어만.
    (워크플로우가 sent_words.json 을 리포에 커밋해줘야 기억이 유지됨 — .yml 참고)
-2) 미션 줄의 **단어** 굵게 표시 버그 수정.
+2) 예문 구조 변경: 2번째 줄을 '완전한 영어 문장'으로, 3번째 줄은 그 한국어 해석으로.
 
 * 시인성(<code> 강조/구분선) + 발음(🔊 네이버 사전 링크) 기능은 그대로.
 """
@@ -88,10 +88,10 @@ USER = f"""오늘({today})의 '초등 영어 10선'을 아래 JSON 형식으로�
 - emoji: 소재에 맞는 이모지 1개 (🎤아이돌 💃댄스 🛍️소품 🎮게임 🎲보드게임 ⚽스포츠 ➗수학 🔬과학 중 택1)
 - word: 영어 단어 (첫 글자 대문자)
 - meaning: 한국어 뜻 (짧고 자연스럽게)
-- example_en: 아이 눈높이의 짧은 예문. 한국어 문장 안에 그 영어 단어를 넣되,
-  그 단어는 반드시 **별표두개**로 감싸라. 예: "하늘에서 **rain**이 내린다."
-  (예문의 나머지는 오직 한글로만! 다른 언어 문자 금지)
-- example_kr: 위 예문의 자연스러운 한국어 해석
+- sentence_en: 그 단어를 사용한 '완전한 영어 문장' 한 개. 아이 눈높이의 짧고 문법에 맞는 문장이어야 한다.
+  대상 단어는 반드시 **별표두개**로 감싸라. 예: "I sing a **song**."
+  (초3은 아주 짧고 쉬운 영어 3~6단어 문장, 초6은 조금 더 길어도 됨. 반드시 완전한 영어 문장!)
+- sentence_kr: 위 영어 문장의 자연스러운 한국어 해석 (오직 한글로만, 다른 언어 문자 금지)
 
 [미션]
 - mission_cho3: 초3 아이가 오늘 단어 하나로 영어 문장 만들어보는 쉬운 미션 한 줄
@@ -100,7 +100,7 @@ USER = f"""오늘({today})의 '초등 영어 10선'을 아래 JSON 형식으로�
 아래 형식의 JSON 객체 하나만 출력해(코드펜스·설명·다른 언어 문자 없이):
 {{
   "items": [
-    {{"grade":"초3","emoji":"💃","word":"Rain","meaning":"비","example_en":"하늘에서 **rain**이 내린다.","example_kr":"하늘에서 비가 내린다."}}
+    {{"grade":"초3","emoji":"🎤","word":"Song","meaning":"노래","sentence_en":"I sing a **song**.","sentence_kr":"나는 노래를 불러요."}}
   ],
   "mission_cho3":"...",
   "mission_cho6":"..."
@@ -181,8 +181,8 @@ def build_message(data: dict) -> str:
         link    = f'🔊 <a href="{naver_link(word)}">발음</a>'
 
         L.append(f"<b>{i}. {emoji} <code>{w_e}</code></b> — {meaning}   {link}")
-        L.append(render_rich(it.get("example_en", "")))
-        L.append(f"→ {esc(it.get('example_kr', ''))}")
+        L.append(render_rich(it.get("sentence_en", "")))
+        L.append(f"→ {esc(it.get('sentence_kr', ''))}")
         L.append("")
 
     L.append("━━━━━━━━━━━━")
