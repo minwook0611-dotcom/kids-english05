@@ -1,24 +1,19 @@
 name: kids-english-bot
-
 on:
   workflow_dispatch:        # 깃허브에서 수동 실행(테스트) 버튼
-
 jobs:
   send:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-
       - uses: actions/setup-python@v5
         with:
           python-version: '3.11'
-
       - name: Install deps
-        run: pip install google-genai requests
-
+        run: pip install openai requests
       - name: Send daily kids english
         run: python kids_english_bot.py
         env:
-          GEMINI_API_KEY:     ${{ secrets.GEMINI_API_KEY }}
+          GROQ_API_KEY:       ${{ secrets.GROQ_API_KEY }}
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID:   ${{ secrets.TELEGRAM_CHAT_ID }}
