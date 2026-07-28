@@ -29,8 +29,9 @@ GROQ_API_KEY       = os.environ["GROQ_API_KEY"]        # gsk_... 로 시작
 TELEGRAM_BOT_TOKEN = os.environ["TELEGRAM_BOT_TOKEN"]
 TELEGRAM_CHAT_ID   = os.environ["TELEGRAM_CHAT_ID"]     # 단체방은 음수 (예: -1001234567890)
 
-# 한국어 품질이 더 좋은 Qwen 사용. 속도가 더 필요하면 "llama-3.3-70b-versatile" 로 되돌릴 수 있음.
-MODEL = "qwen/qwen3-32b"
+# Groq에서 현재 사용 가능 + 무료 티어 모델.
+# (주의: qwen/qwen3-32b, llama-3.3-70b-versatile 은 Groq가 폐기했거나 폐기 예정이라 사용 불가/불안정)
+MODEL = "openai/gpt-oss-120b"
 
 # 한국 시간 기준 오늘 날짜
 KST   = datetime.timezone(datetime.timedelta(hours=9))
