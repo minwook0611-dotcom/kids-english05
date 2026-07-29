@@ -14,6 +14,7 @@ kids-english-bot (Groq / gpt-oss-120b) — 중복 단어 제외 기능 추가
 
 import os
 import re
+import sys
 import html
 import json
 import pathlib
@@ -119,20 +120,18 @@ def generate(use_json: bool):
             {"role": "system", "content": SYSTEM},
             {"role": "user",   "content": USER},
         ],
-        max_tokens=2500,
+        max_tokens=4000,          # gpt-oss는 '생각'에도 토큰을 쓰므로 넉넉히
         temperature=0.8,
+        # gpt-oss 계열: 불필요한 장고를 줄여 JSON 출력에 토큰을 확보 (핵심 안정화)
+        extra_body={"reasoning_effort": "low"},
     )
     if use_json:
         kwargs["response_format"] = {"type": "json_object"}
     return client.chat.completions.create(**kwargs)
 
-try:
-    resp = generate(True)
-except Exception:
-    resp = generate(False)
-
-raw = (resp.choices[0].message.content or "").strip()
-raw = re.sub(r"<think>.*?</think>", "", raw, flags=re.DOTALL).strip()
+def _extract(resp):
+    raw = (resp.choices[0].message.content or "").strip()
+    return re.sub(r"<think>.*?</think>", "", raw, flags=re.DOTALL).strip()
 
 
 # ── JSON 파싱 (안전장치) ────────────────────────────────────
@@ -142,6 +141,27 @@ def parse_json(text: str):
     if m:
         text = m.group(0)
     return json.loads(text)
+
+
+def fetch_data(max_attempts: int = 3) -> dict:
+    """모델 호출 → JSON 파싱까지 최대 max_attempts번 재시도. 실패 시 마지막 에러를 던진다."""
+    last = None
+    for _ in range(max_attempts):
+        try:
+            data = parse_json(_extract(generate(use_json=True)))
+            if data.get("items"):
+                return data
+            last = ValueError("items 비어있음")
+        except Exception as e:
+            last = e
+    # 최후: JSON 모드 없이 한 번 더
+    try:
+        data = parse_json(_extract(generate(use_json=False)))
+        if data.get("items"):
+            return data
+    except Exception as e:
+        last = e
+    raise last if last else RuntimeError("알 수 없는 실패")
 
 
 # ── 텔레그램 HTML 조립 ──────────────────────────────────────
@@ -227,7 +247,7 @@ def send_telegram(msg: str, use_html: bool = True) -> None:
 
 # ── 실행 ────────────────────────────────────────────────────
 try:
-    data = parse_json(raw)
+    data = fetch_data()                      # 재시도 포함
     body = build_message(data)
     send_telegram(body, use_html=True)
 
@@ -239,5 +259,7 @@ try:
     print(f"발송 완료: {today} / 누적 단어 {len(merged)}개")
 
 except Exception as e:
-    send_telegram(f"⚠️ 서식 생성 실패, 원문 발송\n\n{raw}", use_html=False)
-    print("파싱 실패:", e)
+    # 여러 번 재시도해도 실패한 경우: 단체방을 지저분하게 만들지 않고 조용히 종료.
+    # 단, GitHub Actions에는 '실패(빨간불)'로 남겨 사용자가 인지하도록 exit 1.
+    print("최종 실패(재시도 소진):", repr(e))
+    sys.exit(1)
