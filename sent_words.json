@@ -79,6 +79,16 @@
     "hypotenuse",
     "coordinate",
     "planet",
-    "integer"
+    "integer",
+    "cloud",
+    "light",
+    "music",
+    "ball",
+    "algebra",
+    "geometry",
+    "laser",
+    "volleyball",
+    "poker",
+    "galaxy"
   ]
 }
