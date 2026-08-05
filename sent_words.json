@@ -129,6 +129,16 @@
     "challenge",
     "cockpit",
     "altitude",
-    "temperature"
+    "temperature",
+    "moon",
+    "toy",
+    "hair",
+    "sock",
+    "explore",
+    "describe",
+    "manage",
+    "engine",
+    "wing",
+    "science"
   ]
 }
