@@ -175,6 +175,14 @@
     "environment",
     "takeoff",
     "landing",
-    "power"
+    "power",
+    "run",
+    "hop",
+    "choose",
+    "help",
+    "fast",
+    "navigate",
+    "airport",
+    "scale"
   ]
 }
