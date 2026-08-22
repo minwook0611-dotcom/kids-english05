@@ -51,14 +51,19 @@ def save_history(words: list) -> None:
         encoding="utf-8",
     )
 
-sent_words = load_history()                     # 이미 배포한 단어(소문자) 목록
-avoid_block = ", ".join(sent_words) if sent_words else "(아직 없음)"
+# 최근 N개 단어만 '금지'로 본다 → 초3 쉬운 단어 고갈 방지(오래된 단어는 복습 삼아 재등장 허용).
+RECENT_WINDOW = 120
+sent_words   = load_history()                   # 전체 배포 이력(소문자, 발송 순서)
+recent_words = sent_words[-RECENT_WINDOW:]      # 이번에 피할 최근 단어들
+avoid_set    = set(recent_words)                # 코드 레벨 중복 검사에 사용
+avoid_block  = ", ".join(recent_words) if recent_words else "(아직 없음)"
 
 # ── 프롬프트 (JSON 출력) ────────────────────────────────────
 SYSTEM = (
     "너는 초등학생 영어 선생님이야. 두 남매를 위해 매일 영어 단어 10개를 뽑아준다.\n"
     "● 첫째 [초3] 여아: 영어 '초보'다. 아주 쉬운 기초 단어만 다룬다. "
-    "아이돌·댄스·걸그룹·문구/소품 같은 좋아하는 소재로 흥미를 끈다.\n"
+    "동물·음식·색깔·날씨·학교·가족·자연·감정·생활 등 폭넓은 일상 소재를 매일 바꿔가며 쓰고, "
+    "가끔 좋아하는 K-pop·아이돌·댄스·문구/소품도 곁들여 흥미를 끈다. 한 주제에만 매일 몰리지 않는다.\n"
     "● 둘째 [초6] 남아: 곧 중학교에 올라가고 '항공과학고등학교' 진학을 꿈꾼다. "
     "게임·스포츠·보드게임을 좋아하고 항공(비행기·조종)에 관심이 많다. "
     "'중학교 수준의 실용 영어'를 학습 목표로 삼되, 항공 관련 영어와 아이의 관심사를 곁들인다. "
@@ -80,9 +85,11 @@ USER = f"""오늘({today})의 '초등 영어 10선'을 아래 JSON 형식으로�
 
 [구성]
 - items 배열은 정확히 10개.
-- 앞 4개는 grade="초3": 반드시 '짧고 쉬운 기초 단어'만. 대략 3~6글자, 초보가 아는 수준
-  (예: sky, rain, doll, ribbon, jump, smile, cook, paint 등). 길거나 어려운 단어 금지.
-  소재는 K-pop·아이돌·댄스·문구/소품·유행. (초3은 쉬운 게 최우선)
+- 앞 4개는 grade="초3": 반드시 '짧고 쉬운 기초 단어'만(대략 3~6글자, 초보 수준). 길거나 어려운 단어 금지.
+  소재를 매일 폭넓게 바꿔라 — 동물, 음식, 색깔, 날씨, 학교, 가족, 자연, 감정, 생활 동작, 장난감 등.
+  가끔은 K-pop·아이돌·댄스·문구/소품도 좋다. 단, 한 가지 주제에 매일 몰리지 마라.
+  (예: rabbit, cloud, orange, spoon, window, happy, wash, green, brush, cousin 등 매우 다양하게)
+  매일 서로 겹치지 않는 '새로운' 쉬운 단어를 고르는 게 최우선이다.
 - 뒤 6개는 grade="초6": '중학교 1학년 수준'의 실용 영어 어휘 중심. 과학·수학에만 치우치지 마라.
   아래 비율로 6개를 구성하라:
     · 3개: 중학 필수 수준의 일반 영어 어휘(동사·형용사·유용한 표현 등.
@@ -151,25 +158,30 @@ def parse_json(text: str):
     return json.loads(text)
 
 
-def fetch_data(max_attempts: int = 3) -> dict:
-    """모델 호출 → JSON 파싱까지 최대 max_attempts번 재시도. 실패 시 마지막 에러를 던진다."""
-    last = None
+def _dupe_count(data: dict, avoid: set) -> int:
+    return sum(1 for it in data.get("items", [])
+               if str(it.get("word", "")).strip().lower() in avoid)
+
+def fetch_data(avoid: set, max_attempts: int = 4) -> dict:
+    """여러 번 생성해 '중복이 가장 적은' 배치를 고른다. 완전 무중복이면 즉시 채택.
+    → 프롬프트 부탁에만 의존하지 않고 코드가 직접 중복을 걸러낸다."""
+    best, best_dupes = None, 10 ** 9
     for _ in range(max_attempts):
         try:
             data = parse_json(_extract(generate(use_json=True)))
-            if data.get("items"):
-                return data
-            last = ValueError("items 비어있음")
-        except Exception as e:
-            last = e
-    # 최후: JSON 모드 없이 한 번 더
-    try:
-        data = parse_json(_extract(generate(use_json=False)))
-        if data.get("items"):
+        except Exception:
+            continue
+        if not data.get("items"):
+            continue
+        d = _dupe_count(data, avoid)
+        if d < best_dupes:
+            best, best_dupes = data, d
+        if d == 0:                     # 중복 0 → 더 볼 것 없이 채택
             return data
-    except Exception as e:
-        last = e
-    raise last if last else RuntimeError("알 수 없는 실패")
+    if best is not None:
+        return best                    # 최선(중복 최소) 배치 채택
+    # 전부 실패 시 최후: JSON 모드 없이 한 번 더
+    return parse_json(_extract(generate(use_json=False)))
 
 
 # ── 텔레그램 HTML 조립 ──────────────────────────────────────
@@ -255,7 +267,7 @@ def send_telegram(msg: str, use_html: bool = True) -> None:
 
 # ── 실행 ────────────────────────────────────────────────────
 try:
-    data = fetch_data()                      # 재시도 포함
+    data = fetch_data(avoid_set)             # 중복 최소 배치 선택
     body = build_message(data)
     send_telegram(body, use_html=True)
 
